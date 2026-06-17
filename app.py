@@ -112,11 +112,7 @@ def logout():
     session.clear()
     return redirect(url_for("home"))
 
-@app.route("/student")
-def student_dashboard():
-    if session.get("role") != "student":
-        return redirect(url_for("login"))
-    return "<h2>Student Dashboard</h2><a href='/logout'>Logout</a>"
+
 
 @app.route("/contractor")
 def contractor_dashboard():
