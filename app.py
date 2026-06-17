@@ -106,7 +106,74 @@ def logout():
     session.clear()
     return redirect(url_for("home"))
 
+@app.route("/student")
+def student_dashboard():
+    if session.get("role") != "student":
+        return redirect(url_for("login"))
 
+    student_id = session.get("student_id")
+    if not student_id:
+        return redirect(url_for("login"))
+
+    conn = get_db()
+    student = conn.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
+    grades = conn.execute("SELECT * FROM grades_hours WHERE student_id = ? ORDER BY recorded_date DESC", (student_id,)).fetchall()
+    conn.close()
+
+    if not student:
+        return redirect(url_for("login"))
+
+    html = f"""
+    <div class="max-w-5xl mx-auto mt-10 px-6">
+        <h2 class="text-3xl font-semibold">Welcome, {student['full_name']}!</h2>
+        
+        <div class="mt-8 bg-white border rounded-3xl p-8 shadow-sm">
+            <h3 class="font-semibold text-lg mb-4">Your Information</h3>
+            <p><span class="font-medium text-gray-500">Program:</span> {student['program']}</p>
+            <p><span class="font-medium text-gray-500">Payment Plan:</span> {student['payment_plan']}</p>
+        </div>
+    """
+
+    # Grades & Hours Section
+    html += """
+        <div class="mt-8">
+            <h3 class="font-semibold text-lg mb-4">Your Grades & Hours</h3>
+    """
+
+    if grades:
+        html += """
+            <table class="w-full text-sm bg-white border rounded-2xl overflow-hidden">
+                <thead>
+                    <tr class="bg-gray-100 text-left">
+                        <th class="px-6 py-4">Module / Class</th>
+                        <th class="px-6 py-4">Grade</th>
+                        <th class="px-6 py-4">Hours</th>
+                        <th class="px-6 py-4">Date Recorded</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y">
+        """
+        for g in grades:
+            html += f"""
+                <tr>
+                    <td class="px-6 py-4">{g['module_name'] or '-'}</td>
+                    <td class="px-6 py-4 font-medium">{g['grade'] or '-'}</td>
+                    <td class="px-6 py-4">{g['hours_attended'] or '-'}</td>
+                    <td class="px-6 py-4 text-gray-500">{g['recorded_date']}</td>
+                </tr>
+            """
+        html += "</tbody></table>"
+    else:
+        html += "<p class='text-gray-500'>No grades or hours recorded yet.</p>"
+
+    html += """
+        </div>
+        <div class="mt-6">
+            <a href="/logout" class="text-red-600 hover:underline">Logout</a>
+        </div>
+    </div>
+    """
+    return html
 @app.route("/contractor")
 def contractor_dashboard():
     if session.get("role") != "contractor":
