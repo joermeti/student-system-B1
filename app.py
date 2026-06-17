@@ -106,34 +106,7 @@ def logout():
     session.clear()
     return redirect(url_for("home"))
 
-@app.route("/student")
-def student_dashboard():
-    if session.get("role") != "student":
-        return redirect(url_for("login"))
 
-    student_id = session.get("student_id")
-    if not student_id:
-        return redirect(url_for("login"))
-
-    conn = get_db()
-    student = conn.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
-    conn.close()
-
-    if not student:
-        return redirect(url_for("login"))
-
-    return f"""
-    <div style="max-width: 700px; margin: 50px auto; font-family: Arial;">
-        <h2>Welcome, {student['full_name']}!</h2>
-        <div style="background: #f9fafb; padding: 25px; border-radius: 12px; margin-top: 20px;">
-            <p><strong>Program:</strong> {student['program']}</p>
-            <p><strong>Payment Plan:</strong> {student['payment_plan']}</p>
-        </div>
-        <div style="margin-top: 30px;">
-            <a href="/logout" style="color: #b91c1c;">Logout</a>
-        </div>
-    </div>
-    """
 @app.route("/contractor")
 def contractor_dashboard():
     if session.get("role") != "contractor":
