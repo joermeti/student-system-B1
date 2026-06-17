@@ -23,6 +23,18 @@ def init_db():
             enrollment_date TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS grades_hours (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL,
+            semester TEXT,
+            module_name TEXT,
+            grade TEXT,
+            hours_attended INTEGER,
+            recorded_by TEXT,
+            recorded_date TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -73,10 +85,8 @@ def login():
                 <option value="contractor">Electrical Contractor</option>
                 <option value="instructor">Instructor</option>
             </select><br>
-            
             <label>Email or Name:</label><br>
             <input type="text" name="identifier" required style="width:100%; padding:10px; margin-bottom:20px;"><br>
-            
             <button type="submit" style="background:#166534; color:white; padding:12px 30px; border:none; border-radius:8px;">Login</button>
         </form>
         <p><a href="/">Back to Home</a></p>
@@ -96,17 +106,26 @@ def student_dashboard():
     student_id = session.get("student_id")
     conn = get_db()
     student = conn.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
+    grades = conn.execute("SELECT * FROM grades_hours WHERE student_id = ? ORDER BY recorded_date DESC", (student_id,)).fetchall()
     conn.close()
-    return f"""
-    <div style="max-width: 700px; margin: 40px auto; font-family: Arial;">
+
+    html = f"""
+    <div style="max-width: 800px; margin: 40px auto; font-family: Arial;">
         <h2>Welcome, {student['full_name']}</h2>
         <p><strong>Semester:</strong> {student['semester']}</p>
         <p><strong>Payment Plan:</strong> {student['payment_plan']}</p>
-        <p><strong>Contractor:</strong> {student['contractor_name'] if 'contractor_name' in student.keys() else 'N/A'}</p>
         <br>
-        <a href="/logout">Logout</a>
-    </div>
+        <h3>Grades & Attendance</h3>
     """
+    if grades:
+        html += "<table border='1' cellpadding='10'><tr><th>Date</th><th>Module</th><th>Grade</th><th>Hours</th></tr>"
+        for g in grades:
+            html += f"<tr><td>{g['recorded_date']}</td><td>{g['module_name']}</td><td>{g['grade']}</td><td>{g['hours_attended']}</td></tr>"
+        html += "</table>"
+    else:
+        html += "<p>No grades or attendance recorded yet.</p>"
+    html += "<br><a href='/logout'>Logout</a></div>"
+    return html
 
 # ==================== CONTRACTOR DASHBOARD ====================
 @app.route("/contractor")
@@ -115,32 +134,70 @@ def contractor_dashboard():
         return redirect(url_for("login"))
     email = session.get("identifier")
     conn = get_db()
-    students = conn.execute("SELECT * FROM students WHERE email LIKE ?", ('%' + email + '%',)).fetchall()
+    students = conn.execute("SELECT * FROM students WHERE email LIKE ?", ('%' + email.split('@')[0] + '%',)).fetchall()
     conn.close()
-    html = f"<h2>Contractor Dashboard</h2><p>Showing students for: {email}</p>"
+
+    html = f"<div style='max-width:900px; margin:40px auto; font-family:Arial;'><h2>Your Apprentices</h2><p>Showing students associated with: {email}</p>"
     if students:
         for s in students:
-            html += f"<p>{s['full_name']} - {s['email']}</p>"
+            html += f"<p><strong>{s['full_name']}</strong> — {s['email']} ({s['semester']})</p>"
     else:
-        html += "<p>No students found.</p>"
-    html += "<br><a href='/logout'>Logout</a>"
+        html += "<p>No students found for this contractor.</p>"
+    html += "<br><a href='/logout'>Logout</a></div>"
     return html
 
 # ==================== INSTRUCTOR DASHBOARD ====================
-@app.route("/instructor")
+@app.route("/instructor", methods=["GET", "POST"])
 def instructor_dashboard():
     if session.get("role") != "instructor":
         return redirect(url_for("login"))
+
+    conn = get_db()
+    students = conn.execute("SELECT id, full_name FROM students").fetchall()
+
+    if request.method == "POST":
+        student_id = request.form.get("student_id")
+        module_name = request.form.get("module_name")
+        grade = request.form.get("grade")
+        hours = request.form.get("hours_attended") or 0
+        instructor_name = session.get("identifier", "Instructor")
+
+        conn.execute("""
+            INSERT INTO grades_hours (student_id, semester, module_name, grade, hours_attended, recorded_by, recorded_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (student_id, "Fall 2026", module_name, grade, hours, instructor_name, datetime.now().strftime("%Y-%m-%d %H:%M")))
+        conn.commit()
+        flash("Grade and hours saved!")
+
+    conn.close()
     return """
-    <div style="max-width: 700px; margin: 40px auto; font-family: Arial;">
-        <h2>Instructor Dashboard</h2>
-        <p>Welcome! You can add grades and hours here (coming soon).</p>
+    <div style="max-width: 600px; margin: 40px auto; font-family: Arial;">
+        <h2>Instructor Dashboard - Record Grades & Hours</h2>
+        <form method="POST">
+            <label>Student:</label><br>
+            <select name="student_id" style="width:100%; padding:10px; margin-bottom:15px;">
+                {% for s in students %}
+                <option value="{{ s['id'] }}">{{ s['full_name'] }}</option>
+                {% endfor %}
+            </select><br>
+            
+            <label>Module / Class:</label><br>
+            <input type="text" name="module_name" style="width:100%; padding:10px; margin-bottom:15px;"><br>
+            
+            <label>Grade:</label><br>
+            <input type="text" name="grade" style="width:100%; padding:10px; margin-bottom:15px;"><br>
+            
+            <label>Hours Attended:</label><br>
+            <input type="number" name="hours_attended" style="width:100%; padding:10px; margin-bottom:20px;"><br>
+            
+            <button type="submit" style="background:#166534; color:white; padding:12px 30px; border:none; border-radius:8px;">Save Record</button>
+        </form>
         <br>
         <a href="/logout">Logout</a>
     </div>
     """
 
-# ==================== ENROLL + SUCCESS + STUDENTS (same as before) ====================
+# ==================== ENROLL + SUCCESS + STUDENTS ====================
 @app.route("/enroll", methods=["GET", "POST"])
 def enroll():
     if request.method == "POST":
