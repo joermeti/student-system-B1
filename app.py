@@ -174,7 +174,71 @@ def student_dashboard():
     </div>
     """
     return html
+@app.route("/contractor")
+def contractor_dashboard():
+    if session.get("role") != "contractor":
+        return redirect(url_for("login"))
 
+    email = session.get("identifier")
+    conn = get_db()
+    students = conn.execute("""
+        SELECT * FROM students 
+        WHERE contractor_email = ? 
+        ORDER BY full_name
+    """, (email,)).fetchall()
+    conn.close()
+
+    html = f"""
+    <div class="max-w-6xl mx-auto mt-10 px-6">
+        <h2 class="text-3xl font-semibold mb-8">Your Apprentices</h2>
+        <p class="text-gray-600 mb-6">Showing students for: <strong>{email}</strong></p>
+    """
+
+    if not students:
+        html += "<p>No students found for this contractor email.</p>"
+    else:
+        for s in students:
+            grades = conn.execute("""
+                SELECT * FROM grades_hours 
+                WHERE student_id = ? 
+                ORDER BY recorded_date DESC
+            """, (s['id'],)).fetchall()
+
+            html += f"""
+            <div class="bg-white border rounded-3xl p-8 mb-8 shadow-sm">
+                <h3 class="text-xl font-semibold mb-4">{s['full_name']} — {s['program']}</h3>
+            """
+
+            if grades:
+                html += """
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="bg-gray-100 text-left">
+                            <th class="px-4 py-3">Module</th>
+                            <th class="px-4 py-3">Grade</th>
+                            <th class="px-4 py-3">Hours</th>
+                            <th class="px-4 py-3">Date</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y">
+                """
+                for g in grades:
+                    html += f"""
+                    <tr>
+                        <td class="px-4 py-3">{g['module_name'] or '-'}</td>
+                        <td class="px-4 py-3 font-medium">{g['grade'] or '-'}</td>
+                        <td class="px-4 py-3">{g['hours_attended'] or '-'}</td>
+                        <td class="px-4 py-3 text-gray-500">{g['recorded_date']}</td>
+                    </tr>
+                    """
+                html += "</tbody></table>"
+            else:
+                html += "<p class='text-gray-500 mt-2'>No grades recorded yet for this student.</p>"
+
+            html += "</div>"
+
+    html += "<a href='/logout' class='text-red-600 hover:underline'>Logout</a></div>"
+    return html
 
 @app.route("/instructor", methods=["GET", "POST"])
 def instructor_dashboard():
