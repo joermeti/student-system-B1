@@ -174,22 +174,7 @@ def student_dashboard():
     </div>
     """
     return html
-@app.route("/contractor")
-def contractor_dashboard():
-    if session.get("role") != "contractor":
-        return redirect(url_for("login"))
-    email = session.get("identifier")
-    conn = get_db()
-    students = conn.execute("SELECT * FROM students WHERE contractor_email = ? ORDER BY full_name", (email,)).fetchall()
-    conn.close()
-    html = f"<h2 class='text-3xl font-semibold mb-6'>Your Apprentices</h2>"
-    if students:
-        for s in students:
-            html += f"<div class='mb-3'>{s['full_name']} — {s['program']}</div>"
-    else:
-        html += "<p>No students found.</p>"
-    html += "<br><a href='/logout' class='text-red-600'>Logout</a>"
-    return html
+
 
 @app.route("/instructor", methods=["GET", "POST"])
 def instructor_dashboard():
