@@ -162,7 +162,100 @@ def success():
     </div>
     """
 
+# ==================== LOGIN PAGE (Large + Professional with Logo) ====================
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        role = request.form.get("role")
+        identifier = request.form.get("identifier", "").strip()
+        password = request.form.get("password", "").strip()
 
+        if role == "instructor":
+            conn = get_db()
+            instructor = conn.execute("SELECT * FROM instructors WHERE username = ?", (identifier,)).fetchone()
+            conn.close()
+            if not instructor or instructor["password"] != password:
+                flash("Invalid instructor username or password.")
+                return redirect(url_for("login"))
+
+        elif role == "student":
+            conn = get_db()
+            student = conn.execute("SELECT * FROM students WHERE email = ?", (identifier,)).fetchone()
+            conn.close()
+            if student:
+                session["student_id"] = student["id"]
+            else:
+                flash("No student found with that email address.")
+                return redirect(url_for("login"))
+
+        session["role"] = role
+        session["identifier"] = identifier
+        return redirect(url_for(f"{role}_dashboard"))
+
+    return """
+    <div class="min-h-screen bg-gray-50">
+        <!-- Header -->
+        <div class="bg-white border-b">
+            <div class="max-w-6xl mx-auto px-8 py-6 flex justify-between items-center">
+                <div>
+                    <h1 class="text-5xl font-bold text-emerald-700">RMETI</h1>
+                    <p class="text-2xl text-gray-600">Rocky Mountain Electrical Training Institute</p>
+                </div>
+                <div>
+                    <img src="{{ url_for('static', filename='rmeti-logo.jpg') }}" 
+                         alt="RMETI Logo" class="h-20">
+                </div>
+            </div>
+        </div>
+
+        <!-- Login Form -->
+        <div class="max-w-xl mx-auto mt-16 px-6">
+            <div class="bg-white p-14 rounded-3xl shadow-xl border">
+                <h2 class="text-6xl font-semibold mb-12 text-center">Login</h2>
+                
+                <form method="POST" class="space-y-8">
+                    <div>
+                        <label class="block text-2xl mb-3 text-gray-700 font-medium">I am a</label>
+                        <select name="role" id="role" class="w-full border border-gray-300 rounded-2xl px-8 py-6 text-3xl" onchange="togglePassword()">
+                            <option value="student">Student</option>
+                            <option value="contractor">Contractor</option>
+                            <option value="instructor">Instructor</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="block text-2xl mb-3 text-gray-700 font-medium">Email or Username</label>
+                        <input type="text" name="identifier" required 
+                               class="w-full border border-gray-300 rounded-2xl px-8 py-6 text-3xl">
+                    </div>
+
+                    <div id="passwordField" style="display: none;">
+                        <label class="block text-2xl mb-3 text-gray-700 font-medium">Password</label>
+                        <input type="password" name="password" 
+                               class="w-full border border-gray-300 rounded-2xl px-8 py-6 text-3xl">
+                    </div>
+
+                    <button type="submit" 
+                            class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-7 rounded-2xl text-3xl font-semibold mt-4">
+                        Login
+                    </button>
+                </form>
+            </div>
+
+            <div class="mt-8 text-center">
+                <a href="/register_instructor" class="text-emerald-600 hover:underline text-2xl">Register as Instructor</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function togglePassword() {
+            const role = document.getElementById('role').value;
+            document.getElementById('passwordField').style.display = (role === 'instructor') ? 'block' : 'none';
+        }
+        window.onload = togglePassword;
+    </script>
+    """
 # ==================== INSTRUCTOR REGISTRATION ====================
 @app.route("/register_instructor", methods=["GET", "POST"])
 def register_instructor():
