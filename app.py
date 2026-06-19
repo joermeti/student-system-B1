@@ -8,8 +8,7 @@ app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.secret_key = "rmeti-secret-2026"
 
 # ==================== STRIPE CONFIGURATION ====================
-# REPLACE THIS with your actual Stripe Secret Key (starts with sk_test_ or sk_live_)
-stripe.api_key = "sk_test_YOUR_STRIPE_SECRET_KEY_HERE"
+"sk_test_51Tk4WNRTNA1TU9kTBDbPvGXbHJfNYPR35sZl5wXgLKvmqMkUoKd4WurJqQHmqpLnU5zgpMLzs9Cftp0OABfy0TdJ00C5yw3qr0"
 
 # ==================== DATABASE ====================
 def get_db():
