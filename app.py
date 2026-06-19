@@ -8,7 +8,7 @@ app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.secret_key = "rmeti-secret-2026"
 
 # ==================== STRIPE CONFIGURATION ====================
-sk_test_51QBIjDBBkd8fbCjdlTPr2FdrlEdG2p1s2awRpizLOWRaF5FLgQVZBDEgxKtj7ODEVEllmQlsqP2NzK77ytFx7G5y00S1WiYUVh#
+"sk_test_51QBIjDBBkd8fbCjdlTPr2FdrlEdG2p1s2awRpizLOWRaF5FLgQVZBDEgxKtj7ODEVEllmQlsqP2NzK77ytFx7G5y00S1WiYUVh"
 
 # ==================== DATABASE ====================
 def get_db():
