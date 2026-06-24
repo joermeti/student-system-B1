@@ -93,7 +93,83 @@ def home():
     </div>
     """
     return render_page("Home", content)
-
+# ==================== ENROLL & STRIPE REDIRECT ====================
+@app.route("/enroll", methods=["GET", "POST"])
+def enroll():
+    if request.method == "POST":
+        full_name = request.form.get("full_name").strip()
+        email = request.form.get("email").strip()
+        program = request.form.get("program").strip()
+        payment_plan = request.form.get("payment_plan").strip()
+        
+        conn = get_db()
+        try:
+            cursor = conn.cursor()
+            
+            # 1. CHECK IF STUDENT ALREADY EXISTS (Fixes the Stripe Back-Out Bug)
+            existing = cursor.execute("SELECT id FROM students WHERE email = ?", (email,)).fetchone()
+            
+            if existing:
+                student_id = existing['id']
+                cursor.execute("""
+                    UPDATE students 
+                    SET full_name=?, phone=?, program=?, payment_plan=?, contractor_name=?, contractor_email=?, enrollment_date=?
+                    WHERE id=?
+                """, (full_name, request.form.get("phone").strip(), program, payment_plan, 
+                      request.form.get("contractor_name").strip(), request.form.get("contractor_email").strip(), datetime.now().strftime("%Y-%m-%d"), student_id))
+            else:
+                cursor.execute("""
+                    INSERT INTO students (full_name, email, phone, program, payment_plan, contractor_name, contractor_email, enrollment_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (full_name, email, request.form.get("phone").strip(), program, payment_plan, 
+                      request.form.get("contractor_name").strip(), request.form.get("contractor_email").strip(), datetime.now().strftime("%Y-%m-%d")))
+                student_id = cursor.lastrowid
+                
+            conn.commit()
+            
+            # 2. PROCEED TO STRIPE (Unchanged)
+            total_cost = 2400 
+            if "Fast Track" in program:
+                total_cost = 2900
+                
+            payment_amount_cents = 0
+            
+            if "Paid in Full" in payment_plan:
+                payment_amount_cents = total_cost * 100
+            else:
+                try:
+                    months = int(payment_plan.split('-')[0]) 
+                    monthly_payment = total_cost / months 
+                    payment_amount_cents = int(monthly_payment * 100)
+                except:
+                    payment_amount_cents = 50000 
+            
+            checkout_session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                customer_email=email,
+                line_items=[{
+                    'price_data': {
+                        'currency': 'usd',
+                        'unit_amount': payment_amount_cents,
+                        'product_data': {
+                            'name': f'RMETI Tuition - {program}',
+                            'description': f'First Installment: {payment_plan} (Total Course Cost: ${total_cost})',
+                        },
+                    },
+                    'quantity': 1,
+                }],
+                mode='payment',
+                client_reference_id=str(student_id), 
+                success_url=request.host_url + 'payment_success?session_id={CHECKOUT_SESSION_ID}',
+                cancel_url=request.host_url + 'enroll',
+            )
+            return redirect(checkout_session.url, code=303)
+            
+        except Exception as e:
+            flash(f"Payment Gateway Error: Please ensure Stripe API keys are configured properly. Error details: {str(e)}")
+            return redirect(url_for("enroll"))
+        finally:
+            conn.close()
 
   
 
