@@ -95,68 +95,7 @@ def home():
     return render_page("Home", content)
 
 
-    content = """
-    <div class="max-w-4xl mx-auto">
-        <div class="bg-emerald-800 rounded-t-2xl p-8 text-center shadow-md">
-            <h2 class="text-3xl md:text-4xl font-bold text-white">Student Enrollment Application</h2>
-            <p class="text-emerald-100 mt-3 text-lg font-medium">You will be redirected to our secure payment processor to complete registration.</p>
-        </div>
-        <div class="bg-white border border-gray-200 border-t-0 shadow-lg rounded-b-2xl p-10 md:p-12">
-            <form method="POST" class="space-y-10">
-                <div>
-                    <h3 class="text-2xl font-bold text-emerald-800 border-b-2 border-emerald-100 pb-3 mb-6">1. Personal Information</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        <div><label class="block text-base font-bold text-gray-700 mb-2">Full Name *</label><input type="text" name="full_name" required class="input-std"></div>
-                        <div><label class="block text-base font-bold text-gray-700 mb-2">Email Address *</label><input type="email" name="email" required class="input-std"></div>
-                        <div class="md:col-span-2"><label class="block text-base font-bold text-gray-700 mb-2">Phone Number</label><input type="text" name="phone" class="input-std md:w-1/2"></div>
-                    </div>
-                </div>
-                <div>
-                    <h3 class="text-2xl font-bold text-emerald-800 border-b-2 border-emerald-100 pb-3 mb-6">2. Program Details</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        <div>
-                            <label class="block text-base font-bold text-gray-700 mb-2">Select Program *</label>
-                            <select name="program" required class="input-std bg-white">
-                                <option value="">-- Choose a Course --</option>
-                                <option>Fast Track Journeyman semester 1</option><option>Fast Track Journeyman semester 2</option>
-                                <option>Main Program semester 1</option><option>Main Program semester 2</option>
-                                <option>Main Program semester 3</option><option>Main Program semester 4</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-base font-bold text-gray-700 mb-2">Payment Plan *</label>
-                            <select name="payment_plan" required class="input-std bg-white">
-                                <option value="">-- Choose a Plan --</option>
-                                <optgroup label="Fast Track Course ($2,900)">
-                                    <option>4-Month Payment Plan</option><option>5-Month Payment Plan</option>
-                                    <option>6-Month Payment Plan</option><option>Paid in Full</option>
-                                </optgroup>
-                                <optgroup label="Main Program Course ($2,400)">
-                                    <option>4-Month Payment Plan</option><option>5-Month Payment Plan</option>
-                                    <option>6-Month Payment Plan</option><option>7-Month Payment Plan</option>
-                                    <option>8-Month Payment Plan</option><option>9-Month Payment Plan</option>
-                                    <option>10-Month Payment Plan</option><option>11-Month Payment Plan</option>
-                                    <option>12-Month Payment Plan</option><option>Paid in Full</option>
-                                </optgroup>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-                <div class="bg-gray-50 p-8 rounded-xl border border-gray-200">
-                    <h3 class="text-xl font-bold text-gray-800 mb-6">3. Contractor Information <span class="text-base font-normal text-gray-500">(If applicable)</span></h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        <div><label class="block text-base font-bold text-gray-700 mb-2">Contractor Name</label><input type="text" name="contractor_name" class="input-std bg-white"></div>
-                        <div><label class="block text-base font-bold text-gray-700 mb-2">Contractor Email</label><input type="email" name="contractor_email" class="input-std bg-white"></div>
-                    </div>
-                </div>
-                <div class="pt-6">
-                    <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-2xl py-5 rounded-xl shadow-md transition">Proceed to Secure Payment</button>
-                </div>
-            </form>
-        </div>
-    </div>
-    """
-    return render_page("Enroll", content)
+  
 
 # ==================== PAYMENT SUCCESS ====================
 @app.route("/payment_success")
