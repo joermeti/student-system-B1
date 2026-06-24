@@ -492,7 +492,7 @@ def instructor_dashboard():
             <div class="flex flex-col md:flex-row justify-between items-start mb-6 border-b border-gray-100 pb-4">
                 <div>
                     <h3 class="text-2xl font-bold text-gray-800 mb-1">{s['full_name']}</h3>
-                   
+                <p class="text-lg text-emerald-700 font-medium">{s['program']} <span class="text-gray-400 mx-2">|</span> <span class="text-gray-600 text-base">{s['email']}</span> <span class="text-gray-400 mx-2">|</span> <span class="text-gray-800 font-bold text-base">{s['phone']}</span></p>   
                 </div>
                 <div class="flex gap-3 mt-4 md:mt-0">
                     <button onclick="document.getElementById('edit-form-{s['id']}').classList.toggle('hidden')" class="bg-gray-50 hover:bg-gray-100 text-gray-700 px-4 py-2 rounded-lg text-sm font-bold border border-gray-200 transition">Edit Info</button>
