@@ -281,7 +281,12 @@ def register_instructor():
     if request.method == "POST":
         conn = get_db()
         try:
+    # Hash the password before saving
+            hashed_password = generate_password_hash(request.form['password'])
             
+            conn.execute("INSERT INTO instructors (username, password) VALUES (?, ?)", 
+                        (request.form['username'], hashed_password))
+            conn.commit()        
             flash("Account created! Please log in.")
             return redirect(url_for("login"))
         except:
