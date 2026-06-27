@@ -148,18 +148,19 @@ def enroll():
             checkout_session = stripe.checkout.Session.create(
                 payment_method_types=['card'],
                 customer_email=email,
-                line_items=[{
+              line_items=[{
                     'price_data': {
                         'currency': 'usd',
                         'unit_amount': payment_amount_cents,
+                        'recurring': {'interval': 'month'}, 
                         'product_data': {
                             'name': f'RMETI Tuition - {program}',
-                            'description': f'First Installment: {payment_plan} (Total Course Cost: ${total_cost})',
+                            'description': f'Monthly Auto-Pay: {payment_plan}',
                         },
                     },
                     'quantity': 1,
                 }],
-                mode='payment',
+                mode='subscription',  
                 client_reference_id=str(student_id), 
                 success_url=request.host_url + 'payment_success?session_id={CHECKOUT_SESSION_ID}',
                 cancel_url=request.host_url + 'enroll',
