@@ -217,7 +217,7 @@ def login():
         if role == "instructor":
             inst = conn.execute("SELECT * FROM instructors WHERE username = ?", (idnt,)).fetchone()
             conn.close()
-            if inst and inst['password'] == request.form['password']:
+         if inst and check_password_hash(inst['password'], request.form['password']):  
                 session.update({'role': role, 'identifier': idnt})
                 return redirect(url_for('instructor_dashboard'))
             flash("Invalid instructor credentials.")
