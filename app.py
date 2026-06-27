@@ -317,9 +317,12 @@ def instructor_settings():
     if request.method == "POST":
         if "update_profile" in request.form:
             new_username = request.form.get("new_username").strip()
-            new_password = request.form.get("new_password").strip()
+            # Hash the updated password before saving
+            new_password_hashed = generate_password_hash(request.form.get("new_password").strip())
+            
             try:
-                conn.execute("UPDATE instructors SET username=?, password=? WHERE username=?", (new_username, new_password, instructor_name))
+                conn.execute("UPDATE instructors SET username=?, password=? WHERE username=?", 
+                            (new_username, new_password_hashed, instructor_name))
                 conn.commit()
                 session['identifier'] = new_username
                 flash("Profile updated successfully.")
