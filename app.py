@@ -3,7 +3,7 @@ from flask import Flask, request, redirect, url_for, flash, session, get_flashed
 import sqlite3
 from datetime import datetime
 import stripe
-
+from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "rmeti-production-secret-2026")
 
