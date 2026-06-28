@@ -148,7 +148,7 @@ def enroll():
             checkout_session = stripe.checkout.Session.create(
                 payment_method_types=['card'],
                 customer_email=email,
-              line_items=[{
+                line_items=[{
                     'price_data': {
                         'currency': 'usd',
                         'unit_amount': payment_amount_cents,
@@ -218,7 +218,7 @@ def login():
         if role == "instructor":
             inst = conn.execute("SELECT * FROM instructors WHERE username = ?", (idnt,)).fetchone()
             conn.close()
-         if inst and check_password_hash(inst['password'], request.form['password']):  
+            if inst and check_password_hash(inst['password'], request.form['password']):  
                 session.update({'role': role, 'identifier': idnt})
                 return redirect(url_for('instructor_dashboard'))
             flash("Invalid instructor credentials.")
@@ -282,7 +282,7 @@ def register_instructor():
     if request.method == "POST":
         conn = get_db()
         try:
-    # Hash the password before saving
+            # Hash the password before saving
             hashed_password = generate_password_hash(request.form['password'])
             
             conn.execute("INSERT INTO instructors (username, password) VALUES (?, ?)", 
@@ -318,12 +318,18 @@ def instructor_settings():
     if request.method == "POST":
         if "update_profile" in request.form:
             new_username = request.form.get("new_username").strip()
-            # Hash the updated password before saving
-            new_password_hashed = generate_password_hash(request.form.get("new_password").strip())
+            new_password = request.form.get("new_password").strip()
             
             try:
-                conn.execute("UPDATE instructors SET username=?, password=? WHERE username=?", 
-                            (new_username, new_password_hashed, instructor_name))
+                if new_password:
+                    # Only hash and update the password if a new one was typed
+                    new_password_hashed = generate_password_hash(new_password)
+                    conn.execute("UPDATE instructors SET username=?, password=? WHERE username=?", 
+                                (new_username, new_password_hashed, instructor_name))
+                else:
+                    # Keep the existing password hash untouched
+                    conn.execute("UPDATE instructors SET username=? WHERE username=?", 
+                                (new_username, instructor_name))
                 conn.commit()
                 session['identifier'] = new_username
                 flash("Profile updated successfully.")
@@ -347,7 +353,7 @@ def instructor_settings():
         <form method="POST" class="space-y-6 mb-10">
             <input type="hidden" name="update_profile" value="1">
             <div><label class="block text-base font-bold text-gray-700 mb-2">Update Username</label><input type="text" name="new_username" value="{inst['username']}" required class="input-std"></div>
-            <div><label class="block text-base font-bold text-gray-700 mb-2">Update Password</label><input type="text" name="new_password" value="{inst['password']}" required class="input-std"></div>
+            <div><label class="block text-base font-bold text-gray-700 mb-2">Update Password</label><input type="password" name="new_password" placeholder="Leave blank to keep current password" class="input-std"></div>
             <div class="pt-4"><button type="submit" class="btn-green w-full py-4 text-xl">Save Changes</button></div>
         </form>
         <div class="mt-10 text-center"><a href="/instructor_dashboard" class="text-gray-500 hover:text-emerald-700 font-medium hover:underline text-lg">Back to Dashboard</a></div>
