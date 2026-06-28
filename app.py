@@ -1,6 +1,7 @@
 import os
 import secrets
 import smtplib
+import sqlite3
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from urllib.parse import quote
@@ -10,13 +11,12 @@ import stripe
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-import psycopg
-from psycopg import errors as pgerrors
-from psycopg.rows import dict_row
 
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 
 # ==================== SECURITY / SESSION CONFIG ====================
+# Never ship a hardcoded secret key. If FLASK_SECRET_KEY isn't set we generate a
+# random one for this run (sessions reset on restart, which is fine in dev).
 SECRET = os.environ.get("FLASK_SECRET_KEY")
 if not SECRET:
     SECRET = secrets.token_hex(32)
@@ -25,13 +25,15 @@ if not SECRET:
 app.secret_key = SECRET
 
 app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE", "0") == "1",
+    SESSION_COOKIE_HTTPONLY=True,                                  # JS can't read the cookie
+    SESSION_COOKIE_SAMESITE="Lax",                                 # basic CSRF mitigation
+    SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE", "0") == "1",  # set =1 behind HTTPS
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
 )
 
 # ==================== RATE LIMITER ====================
+# In-memory storage is fine for a single dev server. For production behind
+# multiple workers, point storage_uri at Redis, e.g. "redis://localhost:6379".
 limiter = Limiter(
     get_remote_address,
     app=app,
@@ -93,47 +95,27 @@ def send_email(to_address, subject, body):
         print(f"[EMAIL ERROR] {e}")
         return False
 
-# ==================== DATABASE (PostgreSQL) ====================
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
-def _db_url():
-    # Render sometimes hands out the legacy "postgres://" scheme; psycopg
-    # prefers "postgresql://".
-    url = DATABASE_URL
-    if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://"):]
-    return url
+# ==================== DATABASE ====================
+# DB_PATH lets the deploy environment decide where the file lives. Litestream
+# replicates whatever path this points at, so app + litestream.yml must agree.
+DB_PATH = os.environ.get("DB_PATH", "rmeti_portal.db")
 
 def get_db():
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL is not set. Point it at your PostgreSQL database.")
-    # dict_row makes rows behave like the old sqlite3.Row (row['column']).
-    return psycopg.connect(_db_url(), row_factory=dict_row)
+    conn = sqlite3.connect(DB_PATH, timeout=15)
+    conn.row_factory = sqlite3.Row
+    # WAL mode is REQUIRED for Litestream to stream changes to R2.
+    # busy_timeout avoids "database is locked" errors under light concurrency.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
 
 def init_db():
     conn = get_db()
-    conn.execute("""CREATE TABLE IF NOT EXISTS students (
-        id SERIAL PRIMARY KEY,
-        full_name TEXT,
-        email TEXT UNIQUE,
-        phone TEXT,
-        program TEXT,
-        payment_plan TEXT,
-        contractor_name TEXT,
-        contractor_email TEXT,
-        enrollment_date TEXT
-    )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS grades_hours (
-        id SERIAL PRIMARY KEY,
-        student_id INTEGER,
-        module_name TEXT,
-        grade TEXT,
-        hours_attended INTEGER,
-        recorded_by TEXT,
-        recorded_date TEXT
-    )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS instructors (
-        id SERIAL PRIMARY KEY,
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS students (id INTEGER PRIMARY KEY AUTOINCREMENT, full_name TEXT, email TEXT UNIQUE, phone TEXT, program TEXT, payment_plan TEXT, contractor_name TEXT, contractor_email TEXT, enrollment_date TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS grades_hours (id INTEGER PRIMARY KEY AUTOINCREMENT, student_id INTEGER, module_name TEXT, grade TEXT, hours_attended INTEGER, recorded_by TEXT, recorded_date TEXT)")
+    c.execute("""CREATE TABLE IF NOT EXISTS instructors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         full_name TEXT,
         email TEXT UNIQUE,
         password TEXT,
@@ -145,21 +127,17 @@ def init_db():
         reset_expiry TEXT,
         created_date TEXT
     )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS payments (
-        id SERIAL PRIMARY KEY,
-        student_id INTEGER,
-        amount_paid TEXT,
-        status TEXT,
-        date_recorded TEXT
-    )""")
+    c.execute("CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY AUTOINCREMENT, student_id INTEGER, amount_paid TEXT, status TEXT, date_recorded TEXT)")
     conn.commit()
     conn.close()
     migrate_db()
 
 def migrate_db():
-    """Add any instructor columns missing from databases created before the
-    email-verification feature. Postgres supports ADD COLUMN IF NOT EXISTS."""
+    """Add any missing instructor columns for databases created before the
+    email-verification feature existed."""
     conn = get_db()
+    c = conn.cursor()
+    existing = {row[1] for row in c.execute("PRAGMA table_info(instructors)").fetchall()}
     needed = {
         "full_name": "TEXT",
         "email": "TEXT",
@@ -173,8 +151,10 @@ def migrate_db():
         "created_date": "TEXT",
     }
     for col, decl in needed.items():
-        conn.execute(f"ALTER TABLE instructors ADD COLUMN IF NOT EXISTS {col} {decl}")
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_instructor_email ON instructors(email)")
+        if col not in existing:
+            c.execute(f"ALTER TABLE instructors ADD COLUMN {col} {decl}")
+    # Enforce email uniqueness even on migrated tables (NULLs stay distinct in SQLite).
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_instructor_email ON instructors(email)")
     conn.commit()
     conn.close()
 
@@ -194,6 +174,7 @@ def is_expired(expiry_str):
         return True
 
 def valid_email(email):
+    # Deliberately simple: a real address gets verified by the code email anyway.
     return "@" in email and "." in email.split("@")[-1] and len(email) <= 254
 
 def password_problem(pw):
@@ -287,23 +268,23 @@ def enroll():
             cursor = conn.cursor()
 
             # 1. CHECK IF STUDENT ALREADY EXISTS (Fixes the Stripe Back-Out Bug)
-            existing = cursor.execute("SELECT id FROM students WHERE email = %s", (email,)).fetchone()
+            existing = cursor.execute("SELECT id FROM students WHERE email = ?", (email,)).fetchone()
 
             if existing:
                 student_id = existing['id']
                 cursor.execute("""
                     UPDATE students
-                    SET full_name=%s, phone=%s, program=%s, payment_plan=%s, contractor_name=%s, contractor_email=%s, enrollment_date=%s
-                    WHERE id=%s
+                    SET full_name=?, phone=?, program=?, payment_plan=?, contractor_name=?, contractor_email=?, enrollment_date=?
+                    WHERE id=?
                 """, (full_name, request.form.get("phone").strip(), program, payment_plan,
                       request.form.get("contractor_name").strip(), request.form.get("contractor_email").strip(), datetime.now().strftime("%Y-%m-%d"), student_id))
             else:
                 cursor.execute("""
                     INSERT INTO students (full_name, email, phone, program, payment_plan, contractor_name, contractor_email, enrollment_date)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (full_name, email, request.form.get("phone").strip(), program, payment_plan,
                       request.form.get("contractor_name").strip(), request.form.get("contractor_email").strip(), datetime.now().strftime("%Y-%m-%d")))
-                student_id = cursor.fetchone()['id']
+                student_id = cursor.lastrowid
 
             conn.commit()
 
@@ -365,7 +346,6 @@ def enroll():
             return redirect(checkout_session.url, code=303)
 
         except Exception as e:
-            conn.rollback()
             flash(f"Payment Gateway Error: Please ensure Stripe API keys are configured properly. Error details: {str(e)}")
             return redirect(url_for("enroll"))
         finally:
@@ -434,10 +414,10 @@ def payment_success():
         amount_paid = f"${checkout_session.amount_total / 100:.2f}"
 
         conn = get_db()
-        exists = conn.execute("SELECT id FROM payments WHERE student_id = %s AND date_recorded = %s AND amount_paid = %s",
+        exists = conn.execute("SELECT id FROM payments WHERE student_id = ? AND date_recorded = ? AND amount_paid = ?",
                               (student_id, datetime.now().strftime("%Y-%m-%d"), amount_paid)).fetchone()
         if not exists:
-            conn.execute("INSERT INTO payments (student_id, amount_paid, status, date_recorded) VALUES (%s, %s, %s, %s)",
+            conn.execute("INSERT INTO payments (student_id, amount_paid, status, date_recorded) VALUES (?, ?, ?, ?)",
                          (student_id, amount_paid, "Paid", datetime.now().strftime("%Y-%m-%d")))
             conn.commit()
         conn.close()
@@ -467,7 +447,7 @@ def login():
 
         if role == "instructor":
             email = idnt.lower()
-            inst = conn.execute("SELECT * FROM instructors WHERE email = %s", (email,)).fetchone()
+            inst = conn.execute("SELECT * FROM instructors WHERE email = ?", (email,)).fetchone()
             conn.close()
             if inst and inst['password'] and check_password_hash(inst['password'], request.form.get('password', '')):
                 if not inst['is_verified']:
@@ -479,7 +459,7 @@ def login():
             flash("Invalid instructor credentials.")
 
         elif role == "student":
-            s = conn.execute("SELECT * FROM students WHERE email = %s", (idnt.lower(),)).fetchone()
+            s = conn.execute("SELECT * FROM students WHERE email = ?", (idnt.lower(),)).fetchone()
             conn.close()
             if s:
                 session.update({'role': role, 'identifier': idnt.lower(), 'student_id': s['id']})
@@ -558,33 +538,28 @@ def register_instructor():
 
         conn = get_db()
         try:
-            existing = conn.execute("SELECT id, is_verified FROM instructors WHERE email = %s", (email,)).fetchone()
-
-            if existing and existing["is_verified"]:
-                flash("An account with that email already exists. Please log in or use 'Forgot password'.")
-                return redirect(url_for("login"))
-
+            existing = conn.execute("SELECT id, is_verified FROM instructors WHERE email = ?", (email,)).fetchone()
             code = gen_code()
             code_hash = generate_password_hash(code)
             expiry = (datetime.now() + timedelta(minutes=15)).isoformat()
             hashed_pw = generate_password_hash(password)
 
-            if existing:
+            if existing and existing["is_verified"]:
+                conn.close()
+                flash("An account with that email already exists. Please log in or use 'Forgot password'.")
+                return redirect(url_for("login"))
+            elif existing:
                 # Unverified signup that was never completed: refresh details + new code.
                 conn.execute("""UPDATE instructors
-                                SET full_name=%s, password=%s, verify_code_hash=%s, verify_expiry=%s, verify_attempts=0
-                                WHERE email=%s""",
+                                SET full_name=?, password=?, verify_code_hash=?, verify_expiry=?, verify_attempts=0
+                                WHERE email=?""",
                              (full_name, hashed_pw, code_hash, expiry, email))
             else:
                 conn.execute("""INSERT INTO instructors
                                 (full_name, email, password, is_verified, verify_code_hash, verify_expiry, verify_attempts, created_date)
-                                VALUES (%s, %s, %s, 0, %s, %s, 0, %s)""",
+                                VALUES (?, ?, ?, 0, ?, ?, 0, ?)""",
                              (full_name, email, hashed_pw, code_hash, expiry, datetime.now().strftime("%Y-%m-%d")))
             conn.commit()
-        except pgerrors.UniqueViolation:
-            conn.rollback()
-            flash("An account with that email already exists. Please log in.")
-            return redirect(url_for("login"))
         finally:
             conn.close()
 
@@ -624,7 +599,7 @@ def verify_instructor():
         code = request.form.get("code", "").strip()
 
         conn = get_db()
-        inst = conn.execute("SELECT * FROM instructors WHERE email = %s", (email,)).fetchone()
+        inst = conn.execute("SELECT * FROM instructors WHERE email = ?", (email,)).fetchone()
 
         if not inst:
             conn.close()
@@ -646,14 +621,14 @@ def verify_instructor():
         if inst["verify_code_hash"] and check_password_hash(inst["verify_code_hash"], code):
             conn.execute("""UPDATE instructors
                             SET is_verified=1, verify_code_hash=NULL, verify_expiry=NULL, verify_attempts=0
-                            WHERE email=%s""", (email,))
+                            WHERE email=?""", (email,))
             conn.commit()
             conn.close()
             session.pop('pending_email', None)
             flash("Email verified! Your account is now active. Please log in.")
             return redirect(url_for("login"))
         else:
-            conn.execute("UPDATE instructors SET verify_attempts = COALESCE(verify_attempts, 0) + 1 WHERE email=%s", (email,))
+            conn.execute("UPDATE instructors SET verify_attempts = COALESCE(verify_attempts, 0) + 1 WHERE email=?", (email,))
             conn.commit()
             conn.close()
             flash("Incorrect code. Please check your email and try again.")
@@ -684,12 +659,12 @@ def forgot_password():
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
         conn = get_db()
-        inst = conn.execute("SELECT id FROM instructors WHERE email = %s AND is_verified = 1", (email,)).fetchone()
+        inst = conn.execute("SELECT id FROM instructors WHERE email = ? AND is_verified = 1", (email,)).fetchone()
         if inst:
             token = secrets.token_urlsafe(32)
             token_hash = generate_password_hash(token)
             expiry = (datetime.now() + timedelta(minutes=30)).isoformat()
-            conn.execute("UPDATE instructors SET reset_token_hash=%s, reset_expiry=%s WHERE email=%s",
+            conn.execute("UPDATE instructors SET reset_token_hash=?, reset_expiry=? WHERE email=?",
                          (token_hash, expiry, email))
             conn.commit()
             base = request.host_url.rstrip('/')
@@ -731,7 +706,7 @@ def reset_password():
         new_password = request.form.get("new_password", "")
 
         conn = get_db()
-        inst = conn.execute("SELECT * FROM instructors WHERE email = %s", (email,)).fetchone()
+        inst = conn.execute("SELECT * FROM instructors WHERE email = ?", (email,)).fetchone()
 
         if (not inst or not inst["reset_token_hash"] or is_expired(inst["reset_expiry"])
                 or not check_password_hash(inst["reset_token_hash"], token)):
@@ -746,8 +721,8 @@ def reset_password():
             return redirect(url_for("reset_password", email=email, token=token))
 
         conn.execute("""UPDATE instructors
-                        SET password=%s, reset_token_hash=NULL, reset_expiry=NULL
-                        WHERE email=%s""",
+                        SET password=?, reset_token_hash=NULL, reset_expiry=NULL
+                        WHERE email=?""",
                      (generate_password_hash(new_password), email))
         conn.commit()
         conn.close()
@@ -789,24 +764,24 @@ def instructor_settings():
                     conn.close()
                     flash(pw_err)
                     return redirect(url_for("instructor_settings"))
-                conn.execute("UPDATE instructors SET full_name=%s, password=%s WHERE email=%s",
+                conn.execute("UPDATE instructors SET full_name=?, password=? WHERE email=?",
                              (new_name, generate_password_hash(new_password), email))
             else:
-                conn.execute("UPDATE instructors SET full_name=%s WHERE email=%s", (new_name, email))
+                conn.execute("UPDATE instructors SET full_name=? WHERE email=?", (new_name, email))
             conn.commit()
             conn.close()
             flash("Profile updated successfully.")
             return redirect(url_for("instructor_dashboard"))
 
         elif "delete_account" in request.form:
-            conn.execute("DELETE FROM instructors WHERE email=%s", (email,))
+            conn.execute("DELETE FROM instructors WHERE email=?", (email,))
             conn.commit()
             conn.close()
             session.clear()
             flash("Instructor account deleted permanently.")
             return redirect(url_for("home"))
 
-    inst = conn.execute("SELECT * FROM instructors WHERE email = %s", (email,)).fetchone()
+    inst = conn.execute("SELECT * FROM instructors WHERE email = ?", (email,)).fetchone()
     conn.close()
     if not inst:
         session.clear()
@@ -837,13 +812,13 @@ def student_dashboard():
     if session.get('role') != 'student':
         return redirect(url_for('login'))
     conn = get_db()
-    s = conn.execute("SELECT * FROM students WHERE id = %s", (session.get('student_id'),)).fetchone()
+    s = conn.execute("SELECT * FROM students WHERE id = ?", (session.get('student_id'),)).fetchone()
     if not s:
         conn.close()
         return redirect(url_for('login'))
 
-    grades = conn.execute("SELECT * FROM grades_hours WHERE student_id = %s ORDER BY recorded_date DESC", (s['id'],)).fetchall()
-    payments = conn.execute("SELECT * FROM payments WHERE student_id = %s ORDER BY id DESC", (s['id'],)).fetchall()
+    grades = conn.execute("SELECT * FROM grades_hours WHERE student_id = ? ORDER BY recorded_date DESC", (s['id'],)).fetchall()
+    payments = conn.execute("SELECT * FROM payments WHERE student_id = ? ORDER BY id DESC", (s['id'],)).fetchall()
     names = instructor_names(conn)
     conn.close()
 
@@ -901,7 +876,7 @@ def contractor_dashboard():
     if session.get('role') != 'contractor':
         return redirect(url_for('login'))
     conn = get_db()
-    students = conn.execute("SELECT * FROM students WHERE contractor_email = %s ORDER BY full_name", (session['identifier'],)).fetchall()
+    students = conn.execute("SELECT * FROM students WHERE contractor_email = ? ORDER BY full_name", (session['identifier'],)).fetchall()
     names = instructor_names(conn)
 
     html = f"""
@@ -915,7 +890,7 @@ def contractor_dashboard():
 
     for s in students:
         html += f"<div class='bg-white border border-gray-200 rounded-2xl p-8 mb-8 shadow-sm'><h3 class='text-2xl font-bold text-gray-800 mb-2'>{s['full_name']}</h3><p class='text-emerald-700 font-bold text-lg mb-6'>{s['program']}</p>"
-        grades = conn.execute("SELECT * FROM grades_hours WHERE student_id = %s ORDER BY recorded_date DESC", (s['id'],)).fetchall()
+        grades = conn.execute("SELECT * FROM grades_hours WHERE student_id = ? ORDER BY recorded_date DESC", (s['id'],)).fetchall()
         if grades:
             html += "<div class='overflow-x-auto border rounded-lg border-gray-200'><table class='w-full text-left text-base'><tr class='border-b-2 border-gray-200 bg-gray-50 text-gray-700'><th class='py-3 px-4 font-bold'>Module / Class</th><th class='py-3 px-4 font-bold'>Instructor</th><th class='py-3 px-4 font-bold'>Grade</th><th class='py-3 px-4 font-bold'>Hours</th><th class='py-3 px-4 font-bold'>Date</th></tr>"
             for g in grades:
@@ -939,33 +914,32 @@ def instructor_dashboard():
         # DELETE STUDENT ENTIRELY
         if "delete_student_id" in request.form:
             student_id = request.form['delete_student_id']
-            conn.execute("DELETE FROM students WHERE id = %s", (student_id,))
-            conn.execute("DELETE FROM grades_hours WHERE student_id = %s", (student_id,))
-            conn.execute("DELETE FROM payments WHERE student_id = %s", (student_id,))
+            conn.execute("DELETE FROM students WHERE id = ?", (student_id,))
+            conn.execute("DELETE FROM grades_hours WHERE student_id = ?", (student_id,))
+            conn.execute("DELETE FROM payments WHERE student_id = ?", (student_id,))
             flash("Student has been completely removed from the system.")
 
         # EDIT STUDENT INFO
         elif "edit_student_id" in request.form:
             try:
-                conn.execute("UPDATE students SET full_name=%s, email=%s, program=%s, payment_plan=%s WHERE id=%s",
+                conn.execute("UPDATE students SET full_name=?, email=?, program=?, payment_plan=? WHERE id=?",
                              (request.form['edit_s_name'], request.form['edit_s_email'], request.form['edit_s_program'], request.form['edit_s_plan'], request.form['edit_student_id']))
                 flash("Student information updated successfully.")
-            except pgerrors.UniqueViolation:
-                conn.rollback()
+            except sqlite3.IntegrityError:
                 flash("Error: That email address is already in use by another student.")
 
         # DELETE GRADE
         elif "delete_id" in request.form:
-            conn.execute("DELETE FROM grades_hours WHERE id = %s AND recorded_by = %s", (request.form['delete_id'], instructor_name))
+            conn.execute("DELETE FROM grades_hours WHERE id = ? AND recorded_by = ?", (request.form['delete_id'], instructor_name))
 
         # EDIT GRADE
         elif "edit_id" in request.form:
-            conn.execute("UPDATE grades_hours SET module_name=%s, grade=%s, hours_attended=%s WHERE id=%s AND recorded_by = %s",
+            conn.execute("UPDATE grades_hours SET module_name=?, grade=?, hours_attended=? WHERE id=? AND recorded_by = ?",
                          (request.form['edit_module_name'], request.form['edit_grade'], request.form['edit_hours_attended'], request.form['edit_id'], instructor_name))
 
         # ADD GRADE
         elif "mod" in request.form:
-            conn.execute("INSERT INTO grades_hours (student_id, module_name, grade, hours_attended, recorded_by, recorded_date) VALUES (%s,%s,%s,%s,%s,%s)",
+            conn.execute("INSERT INTO grades_hours (student_id, module_name, grade, hours_attended, recorded_by, recorded_date) VALUES (?,?,?,?,?,?)",
                          (request.form['student_id'], request.form['mod'], request.form['grd'], request.form['hrs'], instructor_name, datetime.now().strftime("%Y-%m-%d")))
         conn.commit()
 
@@ -1018,7 +992,7 @@ def instructor_dashboard():
             </form>
         """
 
-        grades = conn.execute("SELECT * FROM grades_hours WHERE student_id = %s AND recorded_by = %s ORDER BY recorded_date DESC", (s['id'], instructor_name)).fetchall()
+        grades = conn.execute("SELECT * FROM grades_hours WHERE student_id = ? AND recorded_by = ? ORDER BY recorded_date DESC", (s['id'], instructor_name)).fetchall()
 
         if grades:
             html += """
