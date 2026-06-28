@@ -2,10 +2,34 @@ services:
   - type: web
     name: rmeti-student-portal
     runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    plan: free
+    buildCommand: "pip install -r requirements.txt && curl -sL https://github.com/benbjohnson/litestream/releases/download/v0.5.2/litestream-0.5.2-linux-x86_64.tar.gz | tar -xz litestream"
+    startCommand: "bash start.sh"
     envVars:
+      - key: DB_PATH
+        value: data/rmeti_portal.db
       - key: FLASK_SECRET_KEY
         generateValue: true
       - key: COOKIE_SECURE
         value: "1"
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      # --- Cloudflare R2 credentials for Litestream backups ---
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
