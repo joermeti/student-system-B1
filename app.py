@@ -128,43 +128,63 @@ def enroll():
                 
             conn.commit()
             
-            # 2. PROCEED TO STRIPE (Unchanged)
+            # 2. DETERMINE COST
             total_cost = 2400 
             if "Fast Track" in program:
                 total_cost = 2900
-                
-            payment_amount_cents = 0
             
+            # 3. BUILD STRIPE CHECKOUT
+            #    - Paid in Full  -> ONE-TIME payment (mode='payment')
+            #    - Installments  -> recurring monthly subscription (mode='subscription')
             if "Paid in Full" in payment_plan:
                 payment_amount_cents = total_cost * 100
+                checkout_session = stripe.checkout.Session.create(
+                    payment_method_types=['card'],
+                    customer_email=email,
+                    line_items=[{
+                        'price_data': {
+                            'currency': 'usd',
+                            'unit_amount': payment_amount_cents,
+                            'product_data': {
+                                'name': f'RMETI Tuition - {program}',
+                                'description': f'One-Time Payment: {payment_plan}',
+                            },
+                        },
+                        'quantity': 1,
+                    }],
+                    mode='payment',
+                    client_reference_id=str(student_id),
+                    success_url=request.host_url + 'payment_success?session_id={CHECKOUT_SESSION_ID}',
+                    cancel_url=request.host_url + 'enroll',
+                )
             else:
                 try:
-                    months = int(payment_plan.split('-')[0]) 
-                    monthly_payment = total_cost / months 
+                    months = int(payment_plan.split('-')[0])
+                    monthly_payment = total_cost / months
                     payment_amount_cents = int(monthly_payment * 100)
                 except:
-                    payment_amount_cents = 50000 
-            
-            checkout_session = stripe.checkout.Session.create(
-                payment_method_types=['card'],
-                customer_email=email,
-                line_items=[{
-                    'price_data': {
-                        'currency': 'usd',
-                        'unit_amount': payment_amount_cents,
-                        'recurring': {'interval': 'month'}, 
-                        'product_data': {
-                            'name': f'RMETI Tuition - {program}',
-                            'description': f'Monthly Auto-Pay: {payment_plan}',
+                    payment_amount_cents = 50000
+                checkout_session = stripe.checkout.Session.create(
+                    payment_method_types=['card'],
+                    customer_email=email,
+                    line_items=[{
+                        'price_data': {
+                            'currency': 'usd',
+                            'unit_amount': payment_amount_cents,
+                            'recurring': {'interval': 'month'},
+                            'product_data': {
+                                'name': f'RMETI Tuition - {program}',
+                                'description': f'Monthly Auto-Pay: {payment_plan}',
+                            },
                         },
-                    },
-                    'quantity': 1,
-                }],
-                mode='subscription',  
-                client_reference_id=str(student_id), 
-                success_url=request.host_url + 'payment_success?session_id={CHECKOUT_SESSION_ID}',
-                cancel_url=request.host_url + 'enroll',
-            )
+                        'quantity': 1,
+                    }],
+                    mode='subscription',
+                    client_reference_id=str(student_id),
+                    success_url=request.host_url + 'payment_success?session_id={CHECKOUT_SESSION_ID}',
+                    cancel_url=request.host_url + 'enroll',
+                )
+
             return redirect(checkout_session.url, code=303)
             
         except Exception as e:
@@ -172,6 +192,56 @@ def enroll():
             return redirect(url_for("enroll"))
         finally:
             conn.close()
+
+    # ========== GET: show the enrollment form ==========
+    content = """
+    <div class="bg-white border border-gray-200 shadow-sm rounded-2xl p-10 md:p-12 max-w-2xl mx-auto mt-8">
+        <h2 class="text-3xl font-bold text-emerald-800 mb-8 text-center">Student Enrollment</h2>
+        <form method="POST" class="space-y-6">
+            <div>
+                <label class="block text-base font-bold text-gray-700 mb-2">Full Name</label>
+                <input type="text" name="full_name" required class="input-std">
+            </div>
+            <div>
+                <label class="block text-base font-bold text-gray-700 mb-2">Email</label>
+                <input type="email" name="email" required class="input-std">
+            </div>
+            <div>
+                <label class="block text-base font-bold text-gray-700 mb-2">Phone</label>
+                <input type="tel" name="phone" required class="input-std">
+            </div>
+            <div>
+                <label class="block text-base font-bold text-gray-700 mb-2">Program</label>
+                <select name="program" required class="input-std bg-white">
+                    <option value="Standard Apprenticeship">Standard Apprenticeship</option>
+                    <option value="Fast Track Apprenticeship">Fast Track Apprenticeship</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-base font-bold text-gray-700 mb-2">Payment Plan</label>
+                <select name="payment_plan" required class="input-std bg-white">
+                    <option value="Paid in Full">Paid in Full</option>
+                    <option value="6-month">6-Month Plan</option>
+                    <option value="12-month">12-Month Plan</option>
+                    <option value="24-month">24-Month Plan</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-base font-bold text-gray-700 mb-2">Contractor / Employer Name</label>
+                <input type="text" name="contractor_name" required class="input-std">
+            </div>
+            <div>
+                <label class="block text-base font-bold text-gray-700 mb-2">Contractor / Employer Email</label>
+                <input type="email" name="contractor_email" required class="input-std">
+            </div>
+            <div class="pt-4">
+                <button type="submit" class="btn-green w-full py-4 text-xl">Continue to Payment</button>
+            </div>
+        </form>
+        <div class="mt-8 text-center"><a href="/" class="text-gray-500 hover:text-emerald-700 font-medium hover:underline text-lg">Back to Home</a></div>
+    </div>
+    """
+    return render_page("Enroll", content)
 
 # ==================== PAYMENT SUCCESS ====================
 @app.route("/payment_success")
